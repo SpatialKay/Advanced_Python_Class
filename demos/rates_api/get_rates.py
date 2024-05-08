@@ -1,4 +1,3 @@
-
 from datetime import date
 import requests
 from rates_api.business_days import business_days
