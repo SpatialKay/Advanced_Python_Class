@@ -10,6 +10,11 @@ import re
 import requests
 import logging
 
+from rates_app.database import SessionLocal, engine, Base
+
+from rates_app.models import ExchangeRate
+
+
 # Task 1 - Cache Rate Results
 
 # Upgrade the application to check the database for a given exchange rate
@@ -85,6 +90,18 @@ class ClientConnectionThread(threading.Thread):
         if command_name not in self.__command_names:
             raise InvalidCommandNameError(command_name, self.__command_names)
 
+        with SessionLocal() as db_session:
+            exchange_rate = (
+                db_session.query(ExchangeRate)
+                .filter_by(
+                    market_date=market_date, currency_symbol=currency_symbol
+                )
+                .first()
+            )
+
+            if exchange_rate:
+                return f"{currency_symbol}: {exchange_rate.currency_rate}"
+
         resp = requests.get(
             (
                 "http://127.0.0.1:8080"
@@ -94,7 +111,16 @@ class ClientConnectionThread(threading.Thread):
             timeout=60,
         )
 
-        currency_rate = resp.json()["rates"][currency_symbol]
+        currency_rate = float(resp.json()["rates"][currency_symbol])
+
+        with SessionLocal() as db_session:
+            exchange_rate = ExchangeRate(
+                market_date=market_date,
+                currency_symbol=currency_symbol,
+                currency_rate=currency_rate,
+            )
+            db_session.add(exchange_rate)
+            db_session.commit()
 
         return f"{currency_symbol}: {currency_rate}"
 
@@ -202,8 +228,17 @@ def command_client_count(counter: Synchronized) -> None:
     print(f"{counter.value} connected clients")
 
 
+def command_clear_cache() -> None:
+    with SessionLocal() as db_session:
+        db_session.query(ExchangeRate).delete()
+        db_session.commit()
+        print("cache cleared")
+
+
 def main() -> None:
     """Main Function"""
+
+    Base.metadata.create_all(bind=engine)
 
     try:
         host = "127.0.0.1"
@@ -214,26 +249,25 @@ def main() -> None:
         while True:
             command = input("> ")
 
-            if command == "start":
-                server_process = command_start_server(
-                    server_process, host, port, counter
-                )
-            elif command == "stop":
-                server_process = command_stop_server(server_process)
-            # step 3 - add a command named "status" that outputs to the
-            # console if the server is current running or not
-            # hint: follow the command function pattern used by the other
-            # commands
-            elif command == "status":
-                command_server_status(server_process)
-            elif command == "count":
-                command_client_count(counter)
-            elif command == "exit":
-                # step 4 - terminate the "server_process" if the
-                # "server_process" is an object and is alive
-                if server_process and server_process.is_alive():
-                    server_process.terminate()
-                break
+            match command:
+                case "start":
+                    server_process = command_start_server(
+                        server_process, host, port, counter
+                    )
+                case "stop":
+                    server_process = command_stop_server(server_process)
+                case "status":
+                    command_server_status(server_process)
+                case "count":
+                    command_client_count(counter)
+                case "clear":
+                    command_clear_cache()
+                case "exit":
+                    if server_process and server_process.is_alive():
+                        server_process.terminate()
+                    break
+                case _:
+                    print("Invalid Command")
 
     except KeyboardInterrupt:
         # step 5 - terminate the "server_process" if the
